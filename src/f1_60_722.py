@@ -290,15 +290,10 @@ def switch_centres_in(polys):
     return out
 
 
-def build_sketch(root, polys, circles=None):
-    """Sketch every polyline loop; if `circles` is given, no polylines are
-    drawn (the shape is entirely circles -> native sketch circles, which stay
-    clean when Fusion snaps sketch coordinates)."""
+def build_sketch(root, polys):
+    """One loop = one sketch segment loop (holes stay holes when each loop is
+    extruded on its own)."""
     sk = root.sketches.add(root.xYConstructionPlane)
-    if circles:
-        for (cx, cy) in circles:
-            sk.sketchCurves.sketchCircles.addByCenterRadius(px(cx, cy), 7.0 * MM)
-        return sk
     sk.isComputeDeferred = True
     lines = sk.sketchCurves.sketchLines
     for pts in polys:
@@ -307,12 +302,10 @@ def build_sketch(root, polys, circles=None):
         sp = []
         for p in pts:
             pt = sk.sketchPoints.add(px(p[0], p[1]))
-            if sp and abs((sp[-1].geometry.x - pt.geometry.x) * 10) < 1e-4 and \
-                    abs((sp[-1].geometry.y - pt.geometry.y) * 10) < 1e-4:
+            if sp and abs((sp[-1].geometry.x - pt.geometry.x) * 10) < 1e-4 and                     abs((sp[-1].geometry.y - pt.geometry.y) * 10) < 1e-4:
                 continue
             sp.append(pt)
-        if len(sp) > 2 and abs((sp[0].geometry.x - sp[-1].geometry.x) * 10) < 1e-4 and \
-                abs((sp[0].geometry.y - sp[-1].geometry.y) * 10) < 1e-4:
+        if len(sp) > 2 and abs((sp[0].geometry.x - sp[-1].geometry.x) * 10) < 1e-4 and                 abs((sp[0].geometry.y - sp[-1].geometry.y) * 10) < 1e-4:
             sp.pop()
         if len(sp) < 3:
             continue
