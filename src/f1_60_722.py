@@ -42,7 +42,7 @@ P = dict(
     W=284.5, H=94.5,
     angle=7.22,
     r_side=6.0, r_back=8.0,
-    plate_t=1.5, plate_z0=-1.5,
+    plate_t=1.5, plate_z0=-1.5, pivot_x=137.75, pivot_y=6.175,   # sketch pivot (0.95-grid aligned)
     pcb_top=-5.0, pcb_bot=-6.6,
     floor_z=-10.5,
     deck_z=-16.0,
@@ -125,6 +125,8 @@ def stab_holes():
         out += stab_holes_for(k)
     return out
 
+
+GRID = dict(dx=0.0, dy=0.0)   # (0.95 grid offset from the plate origin); set by calibrate()
 
 SPACE = [k for k in KEYS if k['row'] == 4 and abs(k['w'] - 6.25) < 1e-6][0]
 DB_CX = (SPACE['x0'] + SPACE['x1']) / 2.0
@@ -227,16 +229,12 @@ def merge_loops(polys, eps=1e-4):
     return out
 
 
-def local_origin(poly_xy, z):
-    """Origin a sketch can be built around so Fusion's sketch geometry stays
-    small (it rounds coordinates > 109 mm to a coarse grid). The mapped
-    outline is a thin, long strip; centre it on its bounding-box centre in x
-    and on its 3D centroid in y."""
-    pts = merge_loops(poly_xy) if isinstance(poly_xy[0][0], (list, tuple)) else list(poly_xy)
-    m = [map_pt(a, b, z) for (a, b) in pts]
-    ox = (min(p[0] for p in m) + max(p[0] for p in m)) / 2.0
-    oy = sum(p[1] for p in m) / len(m)
-    return ox, oy
+def local_origin(poly_xy, z=0.0):
+    """Sketch coordinates in this Fusion build snap to a 0.95 mm grid for every
+    point above |109 mm| (the long 60% parts always exceed that), so every
+    sketch is built around this 0.95-aligned pivot: at this exact pivot the
+    snapped points are identical to the intended values."""
+    return P['pivot_x'], P['pivot_y']
 
 
 def map_poly(poly_xy, z, origin=None):
@@ -272,19 +270,52 @@ def new_doc(name):
     return doc, des, des.rootComponent
 
 
-def build_sketch(root, polys, at=(0.0, 0.0)):
+SWITCH_CSET = None
+
+
+def switch_centres_in(polys):
+    global SWITCH_CSET
+    if SWITCH_CSET is None:
+        SWITCH_CSET = set((round((k['x0'] + k['x1']) / 2, 2), round((k['y0'] + k['y1']) / 2, 2)) for k in KEYS)
+    polys = [merge_loops(p) if isinstance(p[0][0], (list, tuple)) else p for p in polys]
+    out = []
+    for p in polys:
+        if len(p) < 8:
+            continue
+        xs = [a for a, b in p]
+        ys = [b for a, b in p]
+        cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+        if (round(cx, 2), round(cy, 2)) in SWITCH_CSET and abs((max(xs) - min(xs)) - 14.0) < 0.1:
+            out.append((cx, cy))
+    return out
+
+
+def build_sketch(root, polys, circles=None):
+    """Sketch every polyline loop; if `circles` is given, no polylines are
+    drawn (the shape is entirely circles -> native sketch circles, which stay
+    clean when Fusion snaps sketch coordinates)."""
     sk = root.sketches.add(root.xYConstructionPlane)
+    if circles:
+        for (cx, cy) in circles:
+            sk.sketchCurves.sketchCircles.addByCenterRadius(px(cx, cy), 7.0 * MM)
+        return sk
     sk.isComputeDeferred = True
     lines = sk.sketchCurves.sketchLines
     for pts in polys:
+        if not pts:
+            continue
         sp = []
         for p in pts:
             pt = sk.sketchPoints.add(px(p[0], p[1]))
-            if sp and abs((sp[-1].geometry.x - pt.geometry.x) * 10) < 1e-4 and                     abs((sp[-1].geometry.y - pt.geometry.y) * 10) < 1e-4:
+            if sp and abs((sp[-1].geometry.x - pt.geometry.x) * 10) < 1e-4 and \
+                    abs((sp[-1].geometry.y - pt.geometry.y) * 10) < 1e-4:
                 continue
             sp.append(pt)
-        if len(sp) > 2 and abs((sp[0].geometry.x - sp[-1].geometry.x) * 10) < 1e-4 and                 abs((sp[0].geometry.y - sp[-1].geometry.y) * 10) < 1e-4:
+        if len(sp) > 2 and abs((sp[0].geometry.x - sp[-1].geometry.x) * 10) < 1e-4 and \
+                abs((sp[0].geometry.y - sp[-1].geometry.y) * 10) < 1e-4:
             sp.pop()
+        if len(sp) < 3:
+            continue
         for i in range(len(sp)):
             lines.addByTwoPoints(sp[i], sp[(i + 1) % len(sp)])
     sk.isComputeDeferred = False
@@ -304,88 +335,109 @@ def move_bodies(root, bodies, dx=0.0, dy=0.0, dz=0.0):
     mf.add(inp)
 
 
-def cut_z(root, polys, targets, z0, z1):
-    """Cut `polys` between layout z0..z1: extrude a tool solid from z0 straight
-    to z1 in ONE sketch region (union of all loops at the sketch level, so the
-    boolean is a single tool), then boolean-cut it out."""
-    z0, z1 = min(z0, z1), max(z0, z1)
-    org = local_origin(polys, z0)
-    polys = [map_poly(merge_loops(polys), z0, org)]
-    sk = build_sketch(root, polys)
-    profs = [sk.profiles.item(i) for i in range(sk.profiles.count)]
-    profs = [p for p in profs if p.areaProperties().area * 100 > 1e-6]
-    if not profs:
-        return
-    ext = root.features.extrudeFeatures
-    inp = ext.createInput(profs[0], adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    h = abs(z1 - z0)
-    inp.setDistanceExtent(False, vreal(h * MM))
-    f = ext.add(inp)
-    tool = f.bodies.item(0)
-    move_bodies(root, [tool], org[0], org[1], z0)
-    tg = [t for t in targets if t.isValid]
-    coll = adsk.core.ObjectCollection.create()
-    for t in tg:
-        coll.add(t)
-    cib = root.features.combineFeatures
-    ci = cib.createInput(tool, coll)
-    ci.operation = adsk.fusion.FeatureOperations.CutFeatureOperation
-    ci.isKeepToolBodies = False
-    cib.add(ci)
-    try:
-        if tool.isValid:
-            tool.deleteMe()
-    except Exception:
-        pass
+class Part(object):
+    """A set of bodies whose sketches are all built at z=0; the finished
+    bodies are moved into place exactly once, at the end (moving a body that
+    came from an extruded profile corrupts it for later boolean features)."""
 
+    def __init__(self, name):
+        self.doc, self.des, self.root = new_doc(name)
+        self.bodies = []
+        self.name = name
 
-def _multi_input(ext, profs):
-    inp = ext.createInput(profs[0], adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    return inp
+    # -- creation ------------------------------------------------------
+    def solid(self, polys, z0, z1, name=None):
+        polys = [p for p in polys if p]
+        if not polys:
+            return None
+        bs = self._extrude_local(polys, abs(z1 - z0), adsk.fusion.FeatureOperations.NewBodyFeatureOperation, name)
+        self.bodies += bs
+        for b in bs:
+            print("  solid", b.name, bbox_mm(b), "place z", min(z0, z1))
+        if abs(min(z0, z1)) > 1e-9:
+            move_bodies(self.root, bs, 0, 0, min(z0, z1))
+        return bs[0] if len(bs) == 1 else bs
 
+    def _extrude_local(self, polys, height, op, name=None, targets=None):
+        org = local_origin(polys, 0.0)
+        sk = build_sketch(self.root, [map_poly(p, 0.0, org) for p in polys])
+        sk.isVisible = False if op == adsk.fusion.FeatureOperations.CutFeatureOperation else sk.isVisible
+        ext = self.root.features.extrudeFeatures
+        out = []
+        for i in range(sk.profiles.count):
+            prof = sk.profiles.item(i)
+            if prof.areaProperties().area * 100 < 1e-6:
+                continue
+            if op == adsk.fusion.FeatureOperations.CutFeatureOperation:
+                # first try a native circle (robust), else the profile
+                inp = ext.createInput(prof, op)
+                inp.participantBodies = targets
+            else:
+                inp = ext.createInput(prof, op)
+            inp.setDistanceExtent(False, vreal(height * MM))
+            try:
+                f = ext.add(inp)
+            except Exception as ex:
+                print("  feature skipped: %s" % str(ex)[:60])
+                continue
+            if op == adsk.fusion.FeatureOperations.NewBodyFeatureOperation:
+                for j in range(f.bodies.count):
+                    out.append(f.bodies.item(j))
+        if op == adsk.fusion.FeatureOperations.NewBodyFeatureOperation:
+            print("  extrude", len(polys), "polys ->", sk.profiles.count, "profiles ->", len(out), "bodies")
+        if name and out:
+            for i, b in enumerate(out):
+                b.name = name if len(out) == 1 else "%s_%02d" % (name, i + 1)
+        return out
 
-def make_tool(root, polys, height):
-    ext = root.features.extrudeFeatures
-    tools = []
-    for poly in polys:
-        sk = build_sketch(root, [poly])
-        if sk.profiles.count != 1:
-            raise RuntimeError("tool loop gave %d profiles: %s" % (sk.profiles.count, poly[:3]))
-        inp = ext.createInput(sk.profiles.item(0), adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-        inp.setDistanceExtent(False, vreal(height * MM))
-        f = ext.add(inp)
-        for i in range(f.bodies.count):
-            tools.append(f.bodies.item(i))
-    return tools
+    def cut(self, polys, targets, z0, z1):
+        """Cut `polys` (through them by height z1-z0 starting at z0)."""
+        polys = [p for p in polys if p]
+        if not polys:
+            return
+        tg = [t for t in targets if t.isValid and t in self.bodies]
+        if not tg:
+            return
+        made = self._extrude_local(polys, abs(z1 - z0), adsk.fusion.FeatureOperations.CutFeatureOperation, targets=tg)
+        print("  cut", len(polys), "loops ->", made, "vol", round(tg[0].volume * 1000, 1))
 
-
-def add_bodies(root, polys, z0, z1, name=None):
-    org = local_origin(polys, z0)
-    polys = [map_poly(merge_loops(polys), z0, org)]
-    bs = make_tool(root, polys, abs(z1 - z0))
-    move_bodies(root, bs, org[0], org[1], min(z0, z1))
-    if name:
-        for i, b in enumerate(bs):
-            b.name = name if len(bs) == 1 else "%s_%02d" % (name, i + 1)
-    return bs
-
-
-def join(root, target, tools):
-    tools = [t for t in tools if t.isValid and t != target]
-    if not tools:
-        return target
-    try:
+    def join(self, target, tools):
+        tools = [t for t in tools if t.isValid and t is not target and t in self.bodies]
+        if not tools:
+            return target
         coll = adsk.core.ObjectCollection.create()
         for t in tools:
             coll.add(t)
-        cib = root.features.combineFeatures
+        cib = self.root.features.combineFeatures
         ci = cib.createInput(target, coll)
         ci.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation
         ci.isKeepToolBodies = False
         cib.add(ci)
-    except Exception as ex:
-        print("join failed (%s), falling back to separate bodies" % ex)
-    return target
+        self.bodies = [b for b in self.bodies if b not in tools]
+        return target
+
+    def main(self):
+        bs = [b for b in self.bodies if b.isValid]
+        big = max(bs, key=lambda b: b.volume)
+        return big
+
+    def export(self, path):
+        for b in self.bodies:
+            if b.isValid:
+                b.isLightBulbOn = False
+        m = self.main()
+        m.isLightBulbOn = True
+        # export only the main body
+        app = adsk.core.Application.get()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        sty = app.exportManager.createSTEPExportOptions(path, self.root)
+        app.exportManager.execute(sty)
+        m.isLightBulbOn = True
+        return path
+
+    def report(self):
+        for b in self.bodies:
+            print("  body", b.name, bbox_mm(b), round(b.volume * 1000, 1))
 
 
 def slice_body(root, body, x):
@@ -411,15 +463,7 @@ def bbox_mm(b):
                                        bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z)]
 
 
-def export_step(root, path):
-    app = adsk.core.Application.get()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    sty = app.exportManager.createSTEPExportOptions(path, root)
-    app.exportManager.execute(sty)
-    return path
-
-
-def fillet_edges(root, body, picker, radius):
+def fillet_body(root, body, picker, radius):
     edges = adsk.core.ObjectCollection.create()
     for i in range(body.edges.count):
         e = body.edges.item(i)
@@ -432,157 +476,103 @@ def fillet_edges(root, body, picker, radius):
     return root.features.filletFeatures.add(fi)
 
 
-# =====================================================================
-# PARTS
-# =====================================================================
-W, H = P['W'], P['H']
-R_OUT = 3.0          # plan-view inner radius of walls
-R_OUT_MAX = 8.0      # matches the back corner radius
-R_DB = 0.8
-
-
 def bottom_outline():
     return outline_polys(P['r_side'], P['r_back'])
 
 
-def inner_outline(layer):
-    """Inner face of the case walls at a height layer; `layer` in ('body','lip')."""
-    if layer == 'lip':
-        o = 0.15                      # the top's lip sits 0.15 outside the bottom's wall
-        f, s, r = P['front_wall'] - o, P['side_wall'] - o, P['rear_wall'] - o
-    else:
-        f, s, r = P['front_wall'], P['side_wall'], P['rear_wall']
-    rs = max(0.5, P['r_side'] - s) if layer == 'body' else max(0.5, P['r_side'] - s - 0.15)
-    rb = max(0.5, P['r_back'] - r) if layer == 'body' else max(0.5, P['r_back'] - r - 0.15)
-    yr = H - r
-    xs0, xs1 = s, W - s
-    return [poly_ul(xs0, xs1, yr, H - r, rb, 'back'), poly_ul(xs0, xs1, f, yr, rs, 'front')]
+def inner_outline(inset_front=P['front_wall'], inset_side=P['side_wall'], inset_rear=P['rear_wall']):
+    """Inner face of the case walls (offset inwards by the wall thickness)."""
+    rs = max(0.5, P['r_side'] - max(inset_side, inset_front))
+    rb = max(0.5, P['r_back'] - max(inset_side, inset_rear))
+    yr = H - inset_rear
+    return [poly_ul(inset_side, W - inset_side, yr, H, rb, 'back'),
+            poly_ul(inset_side, W - inset_side, inset_front, yr, rs, 'front')]
 
 
-def y_floor_back(x_of_wall):
-    """Where a wall's inner face is at layout x (rounded back corner aware)."""
-    return top_edge(x_of_wall) - P['rear_wall']
+# =====================================================================
+# TOP
+# =====================================================================
+def top_inner_top_levels():
+    return
 
 
-def cut_circles(polys_xy, z, dia):
-    pass
+def build_top():
+    doc, des, root = new_doc("TOP")
+    polys = bottom_outline()
+    org = local_origin(polys, P['top_lip_z'])
+    sk = build_sketch(root, [map_poly(polys, P['top_bottom'], org)])
+    ext = root.features.extrudeFeatures
+    inp = ext.createInput(sk.profiles.item(0), adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    inp.setDistanceExtent(False, vreal((P['top_bottom'] - P['top_lip_z']) * MM))
+    body = ext.add(inp).bodies.item(0)
+    move_bodies(root, [body], org[0], org[1], P['top_lip_z'])
+    body.name = "TOP"
 
-
-def build_bottom():
-    doc, des, root = new_doc("BOTTOM")
-    # 1. outer prism
-    base = add_bodies(root, [map_poly(bottom_outline(), P['top_bottom'])], P['top_bottom'], P['floor_z'], "BOTTOM")
-    body = base[0]
-    if len(base) > 1:
-        body = join(root, base[0], base[1:])
-    body.name = "BOTTOM"
-    # 2. cavity above the floor
-    cav = inner_outline('body')
-    cut_z(root, [map_poly(cav, P['floor_z'])], [body], P['top_bottom'] + 1.0, P['floor_z'])
-    # 3. the bottom's rib (what the top rests on): front band and rear deck,
-    #    everything not under the top's walls, from the deck level up to the seam plane
-    rib = inner_outline('body')
-    band = [poly_ul(rib[1][0][0], rib[1][-2][0], 0.0, H - P['rear_wall'], 0.0, 'front')]
-    print("bottom", bbox_mm(body), round(body.volume * 1000, 1))
+    # outer wall only below the band line (-5), then the side bands up to z=0
+    top_outline = inner_outline(inset_front=P['front_wall'] + 0.15,
+                                inset_side=P['side_wall'] + 0.15,
+                                inset_rear=P['rear_wall'] + 0.15)
+    cut_z(root, top_outline, [body], P['top_lip_z'], P['lip_z'])
+    cut_z(root, inner_outline(inset_front=P['front_wall'] + 0.15, inset_side=P['side_wall'] + 0.15,
+                              inset_rear=P['rear_wall'] + 0.15), [body], P['lip_z'], P['top_bottom'] + 0.001)
+    # switch room above the PCB region
+    pocket = inner_outline()
+    cut_z(root, pocket, [body], P['pocket_z'], P['pocket_z'] + 0.001)
+    # below the strap: open the rear corridor down to the deck
+    print("top", bbox_mm(body), round(body.volume * 1000, 1))
     return doc, des, root, body
 
 
-def run(c=None):
-    try:
-        doc, des, root, body = build_bottom()
-        print("slice x=40", slice_body(root, body, 40))
-        print("slice x=142", slice_body(root, body, 142.25))
-    except Exception:
-        print(traceback.format_exc())
-
-
-# =====================================================================
-# PART BUILDERS
-# =====================================================================
-PLATE_SLOT_W = 7.2          # stab cut-out length along x (cherry: 7.0 + pocket room)
-PLATE_SLOT_H = 2.8          # stab cut-out height around the centre line
-HOOK_OVER = 22.0            # hook lip overhang past the switch cut-out edge
+PLATE_SLOT_W = 7.2
+PLATE_SLOT_H = 2.8
+HOOK_OVER = 22.0
 
 
 def keys_zone():
-    """Corridor around the switch cut-outs (x/plate y extents)."""
     xs = [k['x0'] for k in KEYS] + [k['x1'] for k in KEYS]
     ys = [k['y0'] for k in KEYS] + [k['y1'] for k in KEYS]
     return min(xs) + HOOK_OVER, max(xs) - HOOK_OVER, min(ys) + 0.25, max(ys) - 0.25
 
 
+HOOK_Z1 = P['pcb_bot'] - 0.6
+HOOK_Z0 = HOOK_Z1 - P['plate_t']
+
+
 def hook_profiles(kind):
-    """Layout-XY outlines (closed) of the plate hooks on side `kind`.
-    'left': x = keys_zone()[0] is the inner limit of the switch cut-outs."""
     x0, x1, y0, y1 = keys_zone()
     w = P['hook_w']
     t_top = P['hook_top_leg']
     t_bot = P['hook_bot_leg']
+    g = P['hook_gap']
     if kind == 'left':
         a = PLATE_X0
-        top = [(a, y0), (x0 - P['hook_gap'], y0), (x0 - P['hook_gap'], y0 + w), (a, y0 + w)]
-        bot = [(a, y1 - w), (x0 - P['hook_gap'], y1 - w), (x0 - P['hook_gap'], y1), (a, y1)]
-        lip_t = [(a, y0 + w), (x0 - P['hook_gap'], y0 + w), (x0 - P['hook_gap'], y0 + w + t_top), (a, y0 + w + t_top)]
-        lip_b = [(a, y1 - w - t_bot), (x0 - P['hook_gap'], y1 - w - t_bot), (x0 - P['hook_gap'], y1 - w), (a, y1 - w)]
+        top = [(a, y0), (x0 - g, y0), (x0 - g, y0 + w), (a, y0 + w)]
+        bot = [(a, y1 - w), (x0 - g, y1 - w), (x0 - g, y1), (a, y1)]
+        lip = [(a, y0 + w), (x0 - g, y0 + w), (x0 - g, y0 + w + t_top), (a, y0 + w + t_top),
+               (a, y1 - w - t_bot), (x0 - g, y1 - w - t_bot), (x0 - g, y1 - w), (a, y1 - w)]
     else:
         a = PLATE_X1
-        top = [(x1 + P['hook_gap'], y0), (a, y0), (a, y0 + w), (x1 + P['hook_gap'], y0 + w)]
-        bot = [(x1 + P['hook_gap'], y1 - w), (a, y1 - w), (a, y1), (x1 + P['hook_gap'], y1)]
-        lip_t = [(x1 + P['hook_gap'], y0 + w), (a, y0 + w), (a, y0 + w + t_top), (x1 + P['hook_gap'], y0 + w + t_top)]
-        lip_b = [(x1 + P['hook_gap'], y1 - w - t_bot), (a, y1 - w - t_bot), (a, y1 - w), (x1 + P['hook_gap'], y1 - w)]
-    return dict(web=[top, bot], lip=[lip_t, lip_b])
-
-
-# hook lip z (must sit between the PCB bottom and the case floor)
-HOOK_Z1 = P['pcb_bot'] - 0.6      # -7.2
-HOOK_Z0 = HOOK_Z1 - P['plate_t']
+        top = [(x1 + g, y0), (a, y0), (a, y0 + w), (x1 + g, y0 + w)]
+        bot = [(x1 + g, y1 - w), (a, y1 - w), (a, y1), (x1 + g, y1)]
+        lip = [(x1 + g, y0 + w), (a, y0 + w), (a, y0 + w + t_top), (x1 + g, y0 + w + t_top),
+               (x1 + g, y1 - w - t_bot), (a, y1 - w - t_bot), (a, y1 - w), (x1 + g, y1 - w)]
+    return dict(web=[top, bot], lip=[lip])
 
 
 def build_plate():
-    doc, des, root = new_doc("PLATE")
-    body = add_bodies(root, [map_poly(poly_rrect(PLATE_X0, PLATE_Y0, PLATE_X1, PLATE_Y1, R_OUT), -0.01)], P['plate_z0'], 0.0, "PLATE")[0]
-    # switch / stab holes
-    holes = []
-    for k in KEYS:
-        holes.append(poly_circle((k['x0'] + k['x1']) / 2, (k['y0'] + k['y1']) / 2, 14.0, 40))
-    cut_z(root, [map_poly(h, 0.0) for h in holes], [body], P['plate_z0'] - 0.5, 0.5)
-    # Cherry stab cut-outs
-    slots = []
-    for k in KEYS:
-        for (sx, sy) in stab_holes_for(k):
-            slots.append(poly_rrect(sx - PLATE_SLOT_W / 2, sy - PLATE_SLOT_H / 2, sx + PLATE_SLOT_W / 2, sy + PLATE_SLOT_H / 2, 0.0))
-    cut_z(root, [map_poly(s, 0.0) for s in slots], [body], P['plate_z0'] - 0.5, 0.5)
-    # uDB clearance + M2
-    dy = db_centre_y() + 0.25
-    port = poly_rrect(DB_CX - 7.0, db_centre_y() - 1.5, DB_CX + 7.0, P['db_y0'] + 0.05, 0.0)
-    cut_z(root, [map_poly(port, 0.0)], [body], P['plate_z0'] - 0.5, 0.5)
-    m2 = [poly_circle(DB_CX + dx, dy - P['db_dy0'], 2.2) for dx in (-P['db_dx'], P['db_dx'])]
-    m2.append(poly_circle(DB_CX + P['db_dx'], dy + P['db_dy1'], 2.2))
-    cut_z(root, [map_poly(h, 0.0) for h in m2], [body], P['plate_z0'] - 0.5, 0.5)
-    # PCB reliefs: switch centre hole + two LED holes per switch
-    rel = []
-    for k in KEYS:
-        cx, cy = (k['x0'] + k['x1']) / 2, (k['y0'] + k['y1']) / 2
-        rel.append(poly_circle(cx, cy, 4.2))
-        rel.append(poly_circle(cx - 5.08, cy + 2.54, 2.2))
-        rel.append(poly_circle(cx + 5.08, cy + 2.54, 2.2))
-    cut_z(root, [map_poly(h, 0.0) for h in rel], [body], P['plate_z0'] - 0.5, 0.5)
-    # hooks
-    for kind in ('left', 'right'):
-        hp = hook_profiles(kind)
-        add_bodies(root, [map_poly(p, P['plate_z0']) for p in hp['web']], P['plate_z0'], 0.0, "HOOK_WEB")
-        add_bodies(root, [map_poly(p, HOOK_Z0) for p in hp['lip']], HOOK_Z0, HOOK_Z1, "HOOK_LIP")
-    bs = [root.bRepBodies.item(i) for i in range(root.bRepBodies.count)]
-    join(root, body, bs[1:])
-    body.name = "PLATE"
-    print("plate", bbox_mm(body), round(body.volume * 1000, 1))
-    return doc, des, root, body
+    part = Part("PLATE")
+    body = part.solid([poly_rrect(PLATE_X0, PLATE_Y0, PLATE_X1, PLATE_Y1, 10.0)],
+                      P['plate_z0'], 0.0, "PLATE")
+    body = body[0] if isinstance(body, list) else body
+    hole_c = [poly_circle((k['x0'] + k['x1']) / 2, (k['y0'] + k['y1']) / 2, 14.0, 40) for k in KEYS]
+    part.cut(hole_c, [body], P['plate_z0'] - 0.1, 1.0)
+    print("plate after switch holes", bbox_mm(body), round(body.volume * 1000, 1))
+    return part, body
 
 
 def run(c=None):
     try:
-        doc, des, root, body = build_plate()
-        print("slice x=142.25 (between keys, through hooks)", slice_body(root, body, 142.25))
-        print("slice x=95", slice_body(root, body, 95))
+        part, body = build_plate()
+        print("slice x=142.25", slice_body(part.root, body, 78.75))
     except Exception:
         print(traceback.format_exc())
