@@ -1,0 +1,6 @@
+# user-provided reference drop / dumps -- kept locally, not in the repo
+dalco-959-mini-main/
+ref/img/
+out/*.bak
+*.pyc
+__pycache__/
