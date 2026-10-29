@@ -41,12 +41,17 @@ P = dict(
     plate_y=(-2.665, 108.186),
     switch_side=14.0, hook_over=22.0,
     db_w=18.0, db_h=16.5,
-    screw_inset=6.0, screw_y_front=6.0, screw_y_back=14.25,
-    boss=8.0, insert_d=3.6, insert_len=6.0, screw_d=3.4,
-    weight=(13.0, 13.0, 286.0, 90.0), weight_r=3.0,
-    # F1-8X 722 square feet: 10 x 8 mm pads, glued into a 0.8 mm recess
-    # (measured as 10x8 planar faces on the F1-8X BOTTOM underside).
+    screw_inset=8.0, screw_y_front=8.0, screw_y_back=22.0,
+    # X4 / 嘉立创 M3*4*3: bore Ø3.6 x 5.0, pad 14x14, wall >= 3
+    boss=14.0, insert_d=3.6, insert_len=5.0, screw_d=3.4,
+    nut_pad=14.0,
+    weight=(24.0, 24.0, 275.0, 93.0), weight_r=3.0,
+    # F1-8X 722 square feet: 10 x 8 mm pads on the 3 mm wall band,
+    # inboard of the 14x14 insert pads (screws at 8 mm).
     foot_w=10.0, foot_h=8.0, foot_recess=0.8, foot_inset=8.0,
+    # Rear accent bar (横条), F1-8X style: sits in a rebate on the TOP
+    # back edge. No Geon logo. Print separately, friction-fit.
+    bar_t=3.0, bar_h=8.0, bar_inset=1.5,
 )
 # Layout Y is front lip -> back. Dalco plate Y ran the other way (Esc at
 # y=90.86); we keep front-to-back order and place Esc at 14.66 like a GH60.
@@ -222,20 +227,30 @@ def weight_outline():
 
 
 def feet():
-    """Centres of the square feet, F1-8X style: one at each corner.
-    60% gets 4 pads (F1-8X 80% used 6). Size 10 x 8, long axis along X."""
-    inset = P["foot_inset"]
-    return [
-        (inset + P["foot_w"] / 2, inset + P["foot_h"] / 2),
-        (W - inset - P["foot_w"] / 2, inset + P["foot_h"] / 2),
-        (inset + P["foot_w"] / 2, H - inset - P["foot_h"] / 2),
-        (W - inset - P["foot_w"] / 2, H - inset - P["foot_h"] / 2),
-    ]
+    """Centres of the square feet, F1-8X style.
+    Place them on the wall band, midway between the insert pad and the
+    inner cavity, so the 0.8 mm recess cuts remaining floor not the well."""
+    # screws sit at inset 8; 14x14 pad extends to 8+7=15. Feet 10x8 centred
+    # at 8+7+5+1 = 21 along each edge, still inside the 3 mm? That's past
+    # the 3 mm wall. Keep them on the floor strip BETWEEN wall and well.
+    # wall = 3, well starts at 24 -> strip 3..24. Centre at 13.5.
+    x = 13.5
+    y = 13.5
+    return [(x, y), (W - x, y), (x, H - y), (W - x, H - y)]
 
 
 def foot_outline(cx, cy):
     w, h = P["foot_w"] / 2, P["foot_h"] / 2
     return [(cx - w, cy - h), (cx + w, cy - h), (cx + w, cy + h), (cx - w, cy + h)]
+
+
+def bar_outline():
+    """Accent bar in layout XY: full width minus side inset, along the back edge."""
+    x0 = P["bar_inset"]
+    x1 = W - P["bar_inset"]
+    y0 = H - P["bar_h"]
+    y1 = H
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
 # ---------------------------------------------------------------------------

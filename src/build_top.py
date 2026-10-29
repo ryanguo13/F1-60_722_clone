@@ -87,6 +87,19 @@ def _run():
     print("udb rear-wall window removed", round(v0 - body.volume * 1000, 1),
           "expect", round(dbw * wall * T, 1))
 
+    # Accent-bar rebate: 3 mm deep into the TOP back edge, same XY as the bar
+    # plus 0.2 mm clearance so the printed bar drops in.
+    bar = L["bar_outline"]()
+    # expand 0.2 mm
+    bx0 = min(p[0] for p in bar) - 0.2
+    bx1 = max(p[0] for p in bar) + 0.2
+    by0 = min(p[1] for p in bar) - 0.2
+    by1 = H
+    rebate = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)]
+    v0 = body.volume * 1000
+    B.cut(B.sketch(rebate), body, P["bar_t"])
+    print("bar rebate removed", round(v0 - body.volume * 1000, 1))
+
     for i, (sx, sy) in enumerate(L["screws"]()):
         r = P["screw_d"] / 2.0
         hole = [(sx - r, sy - r), (sx + r, sy - r), (sx + r, sy + r), (sx - r, sy + r)]

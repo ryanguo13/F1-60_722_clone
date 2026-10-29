@@ -89,15 +89,28 @@ def _run():
     B.cut(B.sketch(db), body, T)
     print("udb window removed", round(v0 - body.volume * 1000, 1), "pts", len(db))
 
-    # M3 insert bores at the four screw bosses. Cut from the floor up so the
-    # remaining wall around each hole is the 8 mm boss left in the cavity.
+    # M3 heat-set: 嘉立创 M3*4*3. Leave a 14x14 pad by NOT cutting the
+    # inner well over the four corners (the well already stops short of
+    # the 3 mm wall). Bore Ø3.6 through the remaining floor; JLC inserts
+    # from the underside into a 5.0 mm deep hole. Through-bore is OK for
+    # FDM if the floor is 5.5 mm (0.5 mm extra).
+    pad = P["nut_pad"]
     for i, (sx, sy) in enumerate(L["screws"]()):
+        # 14x14 pad: add a square island in the cavity at each screw
+        hw = pad / 2.0
+        island = [(sx - hw, sy - hw), (sx + hw, sy - hw),
+                  (sx + hw, sy + hw), (sx - hw, sy + hw)]
+        v0 = body.volume * 1000
+        B.extrude_new(B.sketch(island), cavity_h, join=body)
+        print("pad", i, "added", round(body.volume * 1000 - v0, 1),
+              "expect", round(pad * pad * cavity_h, 1))
         r = insert_d / 2.0
         hole = [(sx - r, sy - r), (sx + r, sy - r), (sx + r, sy + r), (sx - r, sy + r)]
         v0 = body.volume * 1000
-        B.cut(B.sketch(hole), body, T)   # through for v1; heat-set from the bottom
+        B.cut(B.sketch(hole), body, insert_h)  # 5.0 mm from the TOP of the pad
         print("insert", i, "at", round(sx, 1), round(sy, 1),
-              "removed", round(v0 - body.volume * 1000, 2))
+              "removed", round(v0 - body.volume * 1000, 2),
+              "expect", round(insert_d * insert_d * insert_h, 2))
 
     # F1-8X 722 square feet: 10 x 8 mm pads, glued. Fusion can only extrude
     # from the top sketch, so a true underside pocket needs a reverse
