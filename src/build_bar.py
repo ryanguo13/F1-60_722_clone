@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Rear accent bar (横条): F1-8X style, no Geon badge.
-
-Prints as a 3 mm thick strip, 8 mm front-to-back, full case width minus
-1.5 mm per side. Friction-fits a matching rebate on the TOP back edge.
-"""
+"""Rear accent bar: F1-8X / Launcher 60 strip, no Geon badge."""
 import os
 import traceback
 
@@ -46,12 +42,8 @@ def _run():
     des = adsk.fusion.Design.cast(doc.products.itemByProductType("DesignProductType"))
     B = Builder(doc, des)
     body = B.extrude_new(B.sketch(poly), T)
-    print("BAR vol", round(body.volume * 1000, 1),
-          "expect", round(abs(loop_area(poly)) * T, 1))
-    bb = body.boundingBox
-    print("BAR bbox mm",
-          [round(v * 10, 2) for v in (bb.minPoint.x, bb.minPoint.y, bb.minPoint.z,
-                                      bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z)])
+    print("BAR vol", round(B.vol(body), 1), "expect", round(loop_area(poly) * T, 1))
+    print("BAR bbox mm", B.bbox_mm(body))
     os.makedirs(OUT, exist_ok=True)
     exp = des.exportManager
     step = os.path.join(OUT, "BAR.step")

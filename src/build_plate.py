@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Build the WKL ANSI plate in Fusion: layout-XY rectangle, 14x14 switch cuts.
-
-Native sketch circles over-cut in this Fusion build; squares do not.
-"""
+"""WKL ANSI plate: 285.75 x 96.10 x 1.5, R2.4, 14x14 holes, Cherry stabs."""
 import os
 import traceback
 
@@ -33,16 +30,11 @@ def _run():
     Builder = F["Builder"]
     loop_area = F["loop_area"]
 
-    KEYS = L["KEYS"]
-    PLATE_X0, PLATE_X1 = L["P"]["plate_x"]
-    PLATE_Y0, PLATE_Y1 = L["P"]["plate_y"]
     T = L["P"]["plate_t"]
     SIDE = L["P"]["switch_side"]
-
     keys = list(L["PLATE_KEYS"])
-    outline = [(PLATE_X0, PLATE_Y0), (PLATE_X1, PLATE_Y0),
-               (PLATE_X1, PLATE_Y1), (PLATE_X0, PLATE_Y1)]
-    expect_blank = abs(loop_area(outline)) * T
+    outline = L["plate_outline"]()
+    expect_blank = loop_area(outline) * T
     hole_a = SIDE * SIDE * T
 
     app = adsk.core.Application.get()
@@ -51,14 +43,13 @@ def _run():
             d.close(False)
         except Exception:
             pass
-
     doc = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
     doc.name = "PLATE"
     des = adsk.fusion.Design.cast(doc.products.itemByProductType("DesignProductType"))
     B = Builder(doc, des)
     body = B.extrude_new(B.sketch(outline), T)
-    print("blank", round(body.volume * 1000, 1), "expect", round(expect_blank, 1),
-          "keys", len(keys), "/", len(KEYS))
+    print("blank", round(B.vol(body), 1), "expect", round(expect_blank, 1),
+          "keys", len(keys), "bbox", B.bbox_mm(body))
 
     removed = 0.0
     bad = 0
@@ -67,9 +58,9 @@ def _run():
         cy = (k["y0"] + k["y1"]) / 2.0
         h = SIDE / 2.0
         sq = [(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h), (cx - h, cy + h)]
-        v0 = body.volume * 1000
+        v0 = B.vol(body)
         B.cut(B.sketch(sq), body, T)
-        dvol = v0 - body.volume * 1000
+        dvol = v0 - B.vol(body)
         removed += dvol
         if abs(dvol - hole_a) > 2.0:
             bad += 1
@@ -77,28 +68,21 @@ def _run():
                   "at", round(cx, 1), round(cy, 1), "removed", round(dvol, 2),
                   "expect", round(hole_a, 2))
         if (i + 1) % 15 == 0:
-            print("  ...", i + 1, "/", len(keys), "vol", round(body.volume * 1000, 1))
+            print("  ...", i + 1, "/", len(keys), "vol", round(B.vol(body), 1))
 
-    # Cherry PCB-mount stabs: 6.75 x 14 slot, same as Dalco ANSI plate.
-    # Overlaps the 14x14 switch hole so extra volume is just the two side ears.
     nstab = 0
     for k in keys:
         for (sx, sy) in L["stab_holes"](k):
             sq = [(sx - 3.375, sy - 7.0), (sx + 3.375, sy - 7.0),
                   (sx + 3.375, sy + 7.0), (sx - 3.375, sy + 7.0)]
-            v0 = body.volume * 1000
+            v0 = B.vol(body)
             B.cut(B.sketch(sq), body, T)
-            dvol = v0 - body.volume * 1000
             nstab += 1
             print("  stab", nstab, "at", round(sx, 1), round(sy, 1),
-                  "removed", round(dvol, 2))
+                  "removed", round(v0 - B.vol(body), 2))
     print("stabs", nstab)
-
-    bb = body.boundingBox
-    print("PLATE bbox mm",
-          [round(v * 10, 2) for v in (bb.minPoint.x, bb.minPoint.y, bb.minPoint.z,
-                                      bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z)])
-    print("PLATE vol", round(body.volume * 1000, 1),
+    print("PLATE bbox mm", B.bbox_mm(body))
+    print("PLATE vol", round(B.vol(body), 1),
           "removed", round(removed, 1), "expect_removed", round(hole_a * len(keys), 1),
           "bad_holes", bad)
 

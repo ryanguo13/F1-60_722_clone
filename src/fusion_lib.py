@@ -130,6 +130,7 @@ class Builder(object):
         self.des = des
         self.root = des.rootComponent
         self.ext = self.root.features.extrudeFeatures
+        self.comb = self.root.features.combineFeatures
 
     # -- features --------------------------------------------------
     def sketch(self, poly):
@@ -137,6 +138,14 @@ class Builder(object):
         sketch_polygon(sk, poly)
         if sk.profiles.count != 1:
             raise RuntimeError("sketch gave %d profiles" % sk.profiles.count)
+        return sk
+
+    def sketch_yz(self, poly):
+        """YZ sketch. Sketch X -> world -Z, sketch Y -> world Y."""
+        sk = self.root.sketches.add(self.root.yZConstructionPlane)
+        sketch_polygon(sk, poly)
+        if sk.profiles.count != 1:
+            raise RuntimeError("yz sketch gave %d profiles" % sk.profiles.count)
         return sk
 
     def extrude_new(self, sk, h, join=None):
@@ -154,6 +163,104 @@ class Builder(object):
         inp.participantBodies = [body]
         inp.setDistanceExtent(False, val(h))
         return self.ext.add(inp)
+
+    def cut_through(self, sk, body, h):
+        return self.cut(sk, body, h)
+
+    def combine_cut(self, target, tool, keep=False):
+        tools = adsk.core.ObjectCollection.create()
+        tools.add(tool)
+        inp = self.comb.createInput(target, tools)
+        inp.operation = adsk.fusion.FeatureOperations.CutFeatureOperation
+        inp.isKeepToolBodies = keep
+        self.comb.add(inp)
+        return target
+
+    def combine_join(self, target, tool, keep=False):
+        tools = adsk.core.ObjectCollection.create()
+        tools.add(tool)
+        inp = self.comb.createInput(target, tools)
+        inp.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation
+        inp.isKeepToolBodies = keep
+        self.comb.add(inp)
+        return target
+
+    def _plane_z(self, front_h, rear_h, y_a, y_b, y):
+        if abs(y_b - y_a) < 1e-9:
+            return front_h
+        return front_h + (rear_h - front_h) * (y - y_a) / (y_b - y_a)
+
+    # YZ sketches extrude from world X=0 in +X. Always span the full case
+    # (~300 mm). Using the body's own width misses anything sitting at large X
+    # (the right-hand paddle, right screw pads, …).
+    YZ_SPAN = 400.0
+
+    def cut_above_plane(self, body, front_h, rear_h, y_a=0.0, y_b=200.0, extra=20.0):
+        """Remove material with z > z(y). YZ sketch X = -world Z."""
+        bb = body.boundingBox
+        ys = bb.minPoint.y * 10, bb.maxPoint.y * 10
+        yc0, yc1 = ys[0] - 2.0, ys[1] + 2.0
+        z0 = self._plane_z(front_h, rear_h, y_a, y_b, yc0)
+        z1 = self._plane_z(front_h, rear_h, y_a, y_b, yc1)
+        ztop = max(z0, z1) + extra
+        cut = [(-z0, yc0), (-ztop, yc0), (-ztop, yc1), (-z1, yc1)]
+        self.cut(self.sketch_yz(cut), body, self.YZ_SPAN)
+        return body
+
+    def cut_below_plane(self, body, front_h, rear_h, y_a=0.0, y_b=200.0):
+        """Remove material with z < z(y)."""
+        bb = body.boundingBox
+        ys = bb.minPoint.y * 10, bb.maxPoint.y * 10
+        yc0, yc1 = ys[0] - 2.0, ys[1] + 2.0
+        z0 = self._plane_z(front_h, rear_h, y_a, y_b, yc0)
+        z1 = self._plane_z(front_h, rear_h, y_a, y_b, yc1)
+        cut = [(2.0, yc0), (-z0, yc0), (-z1, yc1), (2.0, yc1)]
+        self.cut(self.sketch_yz(cut), body, self.YZ_SPAN)
+        return body
+
+    def cut_below_z(self, body, z_mm):
+        """Remove material with world z < z_mm (horizontal slice)."""
+        bb = body.boundingBox
+        ys = bb.minPoint.y * 10, bb.maxPoint.y * 10
+        yc0, yc1 = ys[0] - 2.0, ys[1] + 2.0
+        cut = [(2.0, yc0), (-z_mm, yc0), (-z_mm, yc1), (2.0, yc1)]
+        self.cut(self.sketch_yz(cut), body, self.YZ_SPAN)
+        return body
+
+    def keep_largest(self):
+        """Delete leftover bodies; return the largest remaining one."""
+        bodies = [self.root.bRepBodies.item(i) for i in range(self.root.bRepBodies.count)]
+        if not bodies:
+            return None
+        bodies.sort(key=lambda b: b.volume, reverse=True)
+        keep = bodies[0]
+        for b in bodies[1:]:
+            try:
+                b.deleteMe()
+            except Exception:
+                b.isVisible = False
+        return keep
+
+    def wedge(self, poly, front_h, rear_h, y0=0.0, y1=200.0, extra=20.0):
+        """XY outline extruded past rear_h, then YZ trapezoid cuts z > z(y).
+
+        z(y) interpolates front_h at y0 to rear_h at y1 (default: global 0..H).
+        YZ sketch X = -world Z.
+        """
+        xs = [p[0] for p in poly]
+        zmax = max(front_h, rear_h) + extra
+        body = self.extrude_new(self.sketch(poly), zmax)
+        self.cut_above_plane(body, front_h, rear_h, y0, y1, extra)
+        return body
+
+    def bbox_mm(self, body):
+        bb = body.boundingBox
+        return [round(v * 10, 3) for v in (
+            bb.minPoint.x, bb.minPoint.y, bb.minPoint.z,
+            bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z)]
+
+    def vol(self, body):
+        return body.volume * 1000
 
     # -- measured operations ---------------------------------------
     def cut_measured(self, poly, body, h, expect, label=""):

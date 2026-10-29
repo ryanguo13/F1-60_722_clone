@@ -1,106 +1,105 @@
 # -*- coding: utf-8 -*-
-"""Layout generator for the F1-60 722 clone (offset-agnostic JSON).
+"""Layout for the F1-60 722 clone (WKL, F2-60 XY, 7.22° wedge).
 
-The printable case is one prism: a 2D plan (layout XY) extruded, then sliced
-by horizontal cuts. This module owns the plan: every outline, pocket, boss
-and hole of the three parts, in *layout space*:
+Layout space:
+    x: 0 .. W      left -> right
+    y: 0 .. H      front lip -> back edge
+    z: 0 = desk, +up
+    typing plane: z(y) = front_h + y * tan(7.22°)
+    split plane:  z(y) = split_h + y * tan(7.22°)   (TOP is 8 mm along Z)
 
-    x: 0 .. W      left -> right of the finished keyboard
-    y: 0 .. H      front lip -> back edge  (the back row faces the case's
-                   printed back edge)
-    z: plate top = 0, +up
-
-`plan()` returns, per part, a list of polygon dicts
-{"z": level, "loops": [[(x, y), ...], ...]}; `z` is the layout height of the
-face that polygon makes and the loops are layout mm. A polygon with two
-loops (outer rim, inner hole) is a ring.
-
-Run standalone (`python src/f1_60_722.py`) to dump out/plan_<part>.json.
+Run standalone to dump key numbers.
 """
-import json
 import math
 import os
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "out")
 
 U = 19.05
-# Dalco 959 Mini ANSI plate is exactly 15u wide (285.75 mm). F2-60 case is
-# ~299.2 x 117.1 mm (TOP bbox). Match that envelope: 6.72 mm side walls
-# around the 15u plate, 3.1 mm extra front/back of the 5u key block.
-W, H = 299.19, 117.08
-KX0 = 5.095                          # Dalco Esc-row origin (first 1u centre - 0.5u)
+# W matches F2-60 (thin 3 mm sides). H is grown vs F2-60 117.08 so the
+# 14x14 heat-set pads live in the front/back lips and miss the plate.
+W, H = 299.20, 129.20
+ANGLE_DEG = 7.22
+TAN = math.tan(ANGLE_DEG * math.pi / 180.0)
+
+PLATE_W = 15 * U                 # 285.75
+PLATE_H = 5 * U + 0.85           # 96.10 (0.425 mm margin each side of 5u)
+PLATE_X0 = (W - PLATE_W) / 2.0   # 6.725
+PLATE_Y0 = (H - PLATE_H) / 2.0   # 16.55
+KX0 = PLATE_X0
+ROW_Y = [PLATE_Y0 + 0.425 + U / 2.0 + i * U for i in range(5)]
 
 P = dict(
-    r_side=6.0, r_back=8.0, angle=7.22,
-    side_wall=3.0, front_wall=3.0, rear_wall=3.0,
-    plate_t=1.5,
-    pcb_top=-5.0, pcb_bot=-6.6,
-    seat=-2.0, band=-5.0, pocket=-0.6, lip=-9.0,
-    floor=-10.5, deck=-16.0, weight_floor=1.2,
-    plate_x=(5.094, 290.844),
-    plate_y=(-2.665, 108.186),
-    switch_side=14.0, hook_over=22.0,
-    db_w=18.0, db_h=16.5,
-    screw_inset=8.0, screw_y_front=8.0, screw_y_back=22.0,
-    # X4 / 嘉立创 M3*4*3: bore Ø3.6 x 5.0, pad 14x14, wall >= 3
+    angle=ANGLE_DEG, tan=TAN,
+    r_side=3.0, r_inner=1.0,
+    # Sides stay thin (F1-8X 722 side bezel is 4.2). Front/back carry the
+    # 14x14 heat-set pads and read as the wider lips.
+    side_wall=3.0, front_wall=16.0, rear_wall=16.0,
+    plate_t=1.5, plate_r=2.4,
+    plate_x=(PLATE_X0, PLATE_X0 + PLATE_W),
+    plate_y=(PLATE_Y0, PLATE_Y0 + PLATE_H),
+    front_h=16.0,          # desk -> typing at y=0
+    split_h=8.0,           # desk -> split at y=0 (TOP 8 mm along Z)
+    ceil=0.6,              # TOP roof over the switch opening, along Z
+    floor=2.0,             # BOTTOM remaining floor (weight well + feet)
+    switch_side=14.0,
+    paddle_w=8.0,          # left/right plate shelf, from inner wall under the plate
+    paddle_drop=1.5,       # shelf is this far below typing, along Z
+    db_w=18.0, db_h=8.0,   # USB pill through the rear wall
+    db_r=2.5,
+    # Heat-set nuts sit in the FRONT/BACK walls, not the sides, so the
+    # left/right bezel can stay ~3 mm (F1-8X 722 is 4.2 mm). Front/back
+    # take the 14x14 pads and read as the wider bezels.
+    screw_y=8.0,           # pad centre from front / back outer edge
+    screw_x=50.0,          # pad centre from left / right (clear of R3 and USB)
     boss=14.0, insert_d=3.6, insert_len=5.0, screw_d=3.4,
     nut_pad=14.0,
-    weight=(24.0, 24.0, 275.0, 93.0), weight_r=3.0,
-    # F1-8X 722 square feet: 10 x 8 mm pads on the 3 mm wall band,
-    # inboard of the 14x14 insert pads (screws at 8 mm).
-    foot_w=10.0, foot_h=8.0, foot_recess=0.8, foot_inset=8.0,
-    # Rear accent bar (横条), F1-8X style: sits in a rebate on the TOP
-    # back edge. No Geon logo. Print separately, friction-fit.
+    foot_w=290.0, foot_h=7.0, foot_recess=0.8, foot_y=6.0,
+    rear_foot_w=284.0,
     bar_t=3.0, bar_h=8.0, bar_inset=1.5,
+    chamfer=1.2,           # 36° front/back top edge, mm along each face
 )
-# Layout Y is front lip -> back. Dalco plate Y ran the other way (Esc at
-# y=90.86); we keep front-to-back order and place Esc at 14.66 like a GH60.
-ROW_Y = [14.66, 33.71, 52.76, 71.81, 90.86]
+
+
+def rear_h():
+    return P["front_h"] + H * P["tan"]
+
+
+def split_rear():
+    return P["split_h"] + H * P["tan"]
+
+
+def z_typing(y):
+    return P["front_h"] + y * P["tan"]
+
+
+def z_split(y):
+    return P["split_h"] + y * P["tan"]
 
 
 # ---------------------------------------------------------------------------
 # 2D helpers
 # ---------------------------------------------------------------------------
-def poly_ul(x0, x1, y0, y1, r, side, n=6):
-    """Rectangle whose two corners toward `side` are rounded (polygonal arc)."""
-    def arc(cx, cy, a0):
-        return [(cx + r * math.cos(a0 + (math.pi / 2) * i / n),
-                 cy + r * math.sin(a0 + (math.pi / 2) * i / n)) for i in range(n + 1)]
-    if side == "front":
-        return ([(x0, y1), (x0, y0 + r)] + arc(x0 + r, y0 + r, math.pi) +
-                arc(x1 - r, y0 + r, 1.5 * math.pi) + [(x1, y1)])
-    return ([(x0, y0), (x0, y1 - r)] + arc(x0 + r, y1 - r, math.pi) +
-            arc(x1 - r, y1 - r, 1.5 * math.pi) + [(x1, y0)])
-
-
-def poly_rrect(x0, y0, x1, y1, r):
-    """Rectangle rounded on all four corners."""
+def poly_rrect(x0, y0, x1, y1, r, n=6):
+    """Rectangle rounded on all four corners with circular arcs (CCW)."""
     r = max(0.0, min(r, (x1 - x0) / 2.0 - 0.001, (y1 - y0) / 2.0 - 0.001))
-    if r <= 0.01:
+    if r <= 0.05:
         return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
-    k = 0.55 * r
-    return [
-        (x0 + r, y0), (x1 - r, y0), (x1 - r + k, y0), (x1, y0 + r - k), (x1, y0 + r),
-        (x1, y1 - r), (x1, y1 - r + k), (x1 - r + k, y1), (x1 - r, y1),
-        (x0 + r, y1), (x0 + r - k, y1), (x0, y1 - r + k), (x0, y1 - r),
-        (x0, y0 + r), (x0, y0 + r - k), (x0 + r - k, y0), (x0 + r, y0)]
+
+    def arc(cx, cy, a0, a1):
+        return [(cx + r * math.cos(a0 + (a1 - a0) * i / n),
+                 cy + r * math.sin(a0 + (a1 - a0) * i / n)) for i in range(n + 1)]
+
+    return (arc(x0 + r, y0 + r, math.pi, 1.5 * math.pi) +
+            arc(x1 - r, y0 + r, 1.5 * math.pi, 2.0 * math.pi) +
+            arc(x1 - r, y1 - r, 0.0, 0.5 * math.pi) +
+            arc(x0 + r, y1 - r, 0.5 * math.pi, math.pi))
 
 
-def poly_circle(cx, cy, dia, n=40):
+def poly_circle(cx, cy, dia, n=24):
     r = dia / 2.0
-    return [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n))
-            for i in range(n)]
-
-
-def poly_points(pts, eps=0.01):
-    out = []
-    for p in pts:
-        if out and abs(out[-1][0] - p[0]) < eps and abs(out[-1][1] - p[1]) < eps:
-            continue
-        out.append(p)
-    while len(out) > 2 and abs(out[0][0] - out[-1][0]) < eps and abs(out[0][1] - out[-1][1]) < eps:
-        out.pop()
-    return out
+    return [(cx + r * math.cos(2 * math.pi * i / n),
+             cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
 
 
 def loop_area(loop):
@@ -112,12 +111,22 @@ def loop_area(loop):
     return abs(a) / 2.0
 
 
+def outer_outline():
+    return poly_rrect(0.0, 0.0, W, H, P["r_side"])
+
+
+def inner_outline(gap=0.0):
+    s = P["side_wall"] + gap
+    f = P["front_wall"] + gap
+    r = P["rear_wall"] + gap
+    ri = max(0.6, P["r_inner"] - gap)
+    return poly_rrect(s, f, W - s, H - r, ri)
+
+
 # ---------------------------------------------------------------------------
 # keys (WKL ANSI)
 # ---------------------------------------------------------------------------
 def build_keys():
-    # Standard 60% WKL ANSI. Offsets are from the left of a 15u grid
-    # (KX0 is the grid origin). No extra blocker keys.
     rows = [
         [(0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1),
          (10, 1), (11, 1), (12, 1), (13, 2)],
@@ -137,25 +146,15 @@ def build_keys():
 
 
 KEYS = build_keys()
-# Cherry stabs: L-Shift 2.25 (row 3), Enter 2.25 (row 2), space 6.25 (row 4).
+PLATE_KEYS = list(KEYS)
 STABS = [(3, 2.25, 2.0), (2, 2.25, 2.0), (4, 6.25, 6.25)]
 SPACE = [k for k in KEYS if k["row"] == 4 and abs(k["w"] - 6.25) < 1e-6][0]
-DB_CX = (SPACE["x0"] + SPACE["x1"]) / 2
-PLATE_KEYS = list(KEYS)
-# Keep the Dalco ANSI plate envelope (do not shrink to the key cluster).
-P["plate_x"] = (5.094, 290.844)
-P["plate_y"] = (-2.665, 108.186)
-SW_X0 = min(k["x0"] for k in PLATE_KEYS) - P["hook_over"]
-SW_X1 = max(k["x1"] for k in PLATE_KEYS) + P["hook_over"]
-SW_Y0 = min(k["y0"] for k in PLATE_KEYS)
-SW_Y1 = max(k["y1"] for k in PLATE_KEYS)
-FRONT_ROW_Y1 = max(k["y1"] for k in PLATE_KEYS if k["row"] == 1)
+DB_CX = W / 2.0          # F2-60 USB is on the case centreline, not the spacebar
 
 
 def stab_holes(k):
     """Cherry PCB-mount stab centres. Distances match Dalco ANSI plate."""
     out = []
-    # wire span between stab centres, mm (not unit widths)
     span = {2.0: 23.8, 6.25: 100.0, 2.25: 23.8, 2.75: 23.8}
     for (row, kw, wire) in STABS:
         if k["row"] != row or abs(k["w"] - kw) > 1e-6:
@@ -166,119 +165,92 @@ def stab_holes(k):
     return out
 
 
-# ---------------------------------------------------------------------------
-# case outline
-# ---------------------------------------------------------------------------
-def outline():
-    yr = H - P["rear_wall"]
-    return [poly_ul(0, W, yr, H, P["r_back"], "back"),
-            poly_ul(0, W, 0, yr, P["r_side"], "front")]
-
-
-def inner(gap=0.0):
-    f = P["front_wall"] + gap
-    s = P["side_wall"] + gap
-    r = P["rear_wall"] + gap
-    rs = max(0.5, P["r_side"] - max(s, f))
-    rb = max(0.5, P["r_back"] - max(s, r))
-    return [poly_ul(s, W - s, H - r, H, rb, "back"),
-            poly_ul(s, W - s, f, H - r, rs, "front")]
-
-
-def top_edge(x):
-    r = P["r_back"]
-    if x < r:
-        return H - r + math.sqrt(max(0.0, r * r - (r - x) ** 2))
-    if x > W - r:
-        return H - r + math.sqrt(max(0.0, r * r - (x - (W - r)) ** 2))
-    return H
-
-
-def front_edge(x):
-    r = P["r_side"]
-    if x < r:
-        return r - math.sqrt(max(0.0, r * r - (r - x) ** 2))
-    if x > W - r:
-        return r - math.sqrt(max(0.0, r * r - (x - (W - r)) ** 2))
-    return 0.0
-
-
 def screws():
-    out = []
-    for x in (P["screw_inset"], W - P["screw_inset"]):
-        out.append((x, front_edge(x) + P["screw_y_front"]))
-        out.append((x, top_edge(x) - P["screw_y_back"]))
-    return out
+    """2 on the front lip, 2 on the back edge. Nothing in the side walls."""
+    yf = P["screw_y"]
+    yb = H - P["screw_y"]
+    xl = P["screw_x"]
+    xr = W - P["screw_x"]
+    return [(xl, yf), (xr, yf), (xl, yb), (xr, yb)]
 
 
-def db_centre_y():
-    return (H + P["rear_wall"] + FRONT_ROW_Y1 + 1.0) / 2.0
+def plate_outline():
+    x0, x1 = P["plate_x"]
+    y0, y1 = P["plate_y"]
+    return poly_rrect(x0, y0, x1, y1, P["plate_r"])
 
 
-def db_outline():
-    y = db_centre_y()
-    return poly_rrect(DB_CX - P["db_w"] / 2 - 0.3, y - P["db_h"] / 2 - 0.3,
-                      DB_CX + P["db_w"] / 2 + 0.3, y + P["db_h"] / 2 + 0.3, 0.8)
+def switch_window():
+    """Ceiling opening: plate inset 1.5 mm so the bezel covers the plate edge."""
+    x0, x1 = P["plate_x"]
+    y0, y1 = P["plate_y"]
+    b = 1.5
+    return poly_rrect(x0 + b, y0 + b, x1 - b, y1 - b, max(0.6, P["plate_r"] - b))
 
 
-def weight_outline():
-    x0, y0, x1, y1 = P["weight"]
-    return poly_rrect(x0, y0, x1, y1, P["weight_r"])
-
-
-def feet():
-    """Centres of the square feet, F1-8X style.
-    Place them on the wall band, midway between the insert pad and the
-    inner cavity, so the 0.8 mm recess cuts remaining floor not the well."""
-    # screws sit at inset 8; 14x14 pad extends to 8+7=15. Feet 10x8 centred
-    # at 8+7+5+1 = 21 along each edge, still inside the 3 mm? That's past
-    # the 3 mm wall. Keep them on the floor strip BETWEEN wall and well.
-    # wall = 3, well starts at 24 -> strip 3..24. Centre at 13.5.
-    x = 13.5
-    y = 13.5
-    return [(x, y), (W - x, y), (x, H - y), (W - x, H - y)]
-
-
-def foot_outline(cx, cy):
-    w, h = P["foot_w"] / 2, P["foot_h"] / 2
-    return [(cx - w, cy - h), (cx + w, cy - h), (cx + w, cy + h), (cx - w, cy + h)]
+def usb_outline():
+    w, h, r = P["db_w"], P["db_h"], P["db_r"]
+    x0 = DB_CX - w / 2.0
+    y0 = H - P["rear_wall"] - 0.4
+    y1 = H + 0.2
+    return poly_rrect(x0, y0, x0 + w, y1, min(r, (y1 - y0) / 2.0 - 0.05))
 
 
 def bar_outline():
-    """Accent bar in layout XY: full width minus side inset, along the back edge."""
     x0 = P["bar_inset"]
     x1 = W - P["bar_inset"]
     y0 = H - P["bar_h"]
-    y1 = H
-    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    return [(x0, y0), (x1, y0), (x1, H), (x0, H)]
 
 
-# ---------------------------------------------------------------------------
-# part plans: list of {"z": face level, "loops": [...], "op": "solid|cavity"}
-# ---------------------------------------------------------------------------
-def bottom_plan():
-    return dict(name="BOTTOM", top=0.0, bottom=P["deck"])
+def paddle_outlines():
+    """Left / right plate shelves in XY (under the plate, from the inner wall)."""
+    y0, y1 = P["plate_y"]
+    w = P["paddle_w"]
+    s = P["side_wall"]
+    left = [(s, y0), (s + w, y0), (s + w, y1), (s, y1)]
+    right = [(W - s - w, y0), (W - s, y0), (W - s, y1), (W - s - w, y1)]
+    return left, right
 
 
-def top_plan():
-    return dict(name="TOP", top=0.0, bottom=P["lip"])
+def foot_outlines():
+    """Two F2-60-style rubber-strip recesses on the desk face."""
+    rec = P["foot_recess"]
+    fy = P["foot_y"]
+    fh = P["foot_h"]
+    fw, rw = P["foot_w"], P["rear_foot_w"]
+    fx0 = (W - fw) / 2.0
+    rx0 = (W - rw) / 2.0
+    front = [(fx0, fy), (fx0 + fw, fy), (fx0 + fw, fy + fh), (fx0, fy + fh)]
+    back = [(rx0, H - fy - fh), (rx0 + rw, H - fy - fh),
+            (rx0 + rw, H - fy), (rx0, H - fy)]
+    return front, back
 
 
-def plate_plan():
-    return dict(name="PLATE", top=0.0, bottom=-P["plate_t"])
+def pad_outline(sx, sy):
+    h = P["nut_pad"] / 2.0
+    return [(sx - h, sy - h), (sx + h, sy - h), (sx + h, sy + h), (sx - h, sy + h)]
 
 
-def plan():
-    return {"bottom": bottom_plan(), "top": top_plan(), "plate": plate_plan()}
+def insert_outline(sx, sy):
+    r = P["insert_d"] / 2.0
+    return [(sx - r, sy - r), (sx + r, sy - r), (sx + r, sy + r), (sx - r, sy + r)]
+
+
+def screw_outline(sx, sy):
+    r = P["screw_d"] / 2.0
+    return [(sx - r, sy - r), (sx + r, sy - r), (sx + r, sy + r), (sx - r, sy + r)]
 
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    p = plan()
-    for part, d in p.items():
-        print(part, d)
-    print("keys", len(KEYS), "on plate", len(PLATE_KEYS),
-          "screws", [(round(a, 1), round(b, 1)) for a, b in screws()],
-          "uDB centre", (round(DB_CX, 2), round(db_centre_y(), 2)))
-    print("plate x %.2f..%.2f y %.2f..%.2f" % (P["plate_x"] + P["plate_y"]))
-    print("switch area x %.1f..%.1f y %.1f..%.1f" % (SW_X0, SW_X1, SW_Y0, SW_Y1))
+    print("W H", W, H)
+    print("typing front/rear", P["front_h"], round(rear_h(), 3))
+    print("split  front/rear", P["split_h"], round(split_rear(), 3))
+    print("plate", [round(v, 3) for v in P["plate_x"] + P["plate_y"]],
+          "size", round(PLATE_W, 3), round(PLATE_H, 3))
+    print("ROW_Y", [round(y, 3) for y in ROW_Y])
+    print("keys", len(KEYS), "screws", [(round(a, 1), round(b, 1)) for a, b in screws()])
+    print("uDB cx", round(DB_CX, 2), "space cx", round((SPACE["x0"] + SPACE["x1"]) / 2, 2))
+    print("outer area", round(loop_area(outer_outline()), 1),
+          "inner area", round(loop_area(inner_outline()), 1))

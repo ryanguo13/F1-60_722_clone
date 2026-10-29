@@ -1,36 +1,41 @@
-# F1-60 722 clone — checkpoint
+# F1-60 722 clone — 打印与装配
 
-WKL 60% printable tray set for JLCPCB FDM. Not yet the finished 7.22°
-wedge / rounded F1-8X silhouette.
+WKL 60%，7.22° 楔形，嘉立创 FDM。外形对齐 Launcher 60 / F2-60，
+前后壁加厚到 16 mm 以放下热熔螺母（见 [DESIGN.md](DESIGN.md)）。
 
-## What is in `out/`
+## `out/` 当前件
 
-| File | Size (mm) | Notes |
+| 文件 | 尺寸 (mm) | 说明 |
 | --- | --- | --- |
-| `PLATE.stl` | 285.75 × 110.85 × 1.5 | Dalco 959 Mini ANSI envelope, 62 × 14×14 switch holes, 6 Cherry stab slots (L-Shift, Enter, 6.25u space) |
-| `BOTTOM.stl` | 299.19 × 117.08 × 16 | Inner well, weight well (1.2 mm floor left), ai03 UDB-C rear window, 4 × 14×14 M3 heat-set pads (嘉立创 `M3*4*3`, bore Ø3.6 × 5.0), 4 × 10×8 mm feet recesses |
-| `TOP.stl` | 299.19 × 117.08 × 9 | 3 mm walls, switch ceiling opening, rear-wall UDB window, accent-bar rebate |
-| `BAR.stl` | 296.19 × 8 × 3 | Rear accent bar, no Geon logo, friction-fits the TOP rebate |
+| `PLATE.stl` | 285.75 × 96.10 × 1.5 | WKL ANSI，62 × 14×14 轴孔，6 个 Cherry 卫星轴槽 |
+| `BOTTOM.stl` | 299.20 × 129.20 × 24.37 | 楔形底壳，2 mm 底板，前/后各 2 个 14×14 M3 热熔垫（Ø3.6 × 5.0），两条脚垫槽，后壁 USB |
+| `TOP.stl` | 299.20 × 129.20 × 24.3（分型 8 → 打字 32.37） | 楔形上盖，键窗，左右桨式托台，后沿横条凹台，M3 通孔 Ø3.4 |
+| `BAR.stl` | 296.20 × 8 × 3 | 后横条，无 logo，摩擦进上盖凹台 |
 
-PCB fit: waffling60-DB / any GH60-class 60% with ai03 Unified Daughterboard C (18 × 16.5, M2 14 × 12.5). Geon DB hole pattern is **not** copied.
+PCB：waffling60-DB / 任意 GH60 + ai03 UDB-C（18 × 16.5，M2 14 × 12.5）。
 
-## Heat-set (from X4)
+## 热熔（从 X4）
 
-- Nut: 嘉立创 `M3*4*3` (Ø4 × L3)
-- Printed bore: Ø3.6 × 5.0
-- Pad: 14 × 14, wall around hole (14 − 3.6)/2 = 5.2 ≥ 3.0
-- Screw: M3×6 pan head, clearance Ø3.4
+- 螺母：嘉立创 `M3*4*3`（Ø4 × L3）
+- 打印底孔：Ø3.6 × 5.0，从 **BOTTOM 底面**开口，代嵌
+- 垫：14 × 14，孔周壁 (14 − 3.6)/2 = 5.2 ≥ 3.0
+- 螺钉：M3×8～10 盘头，上盖通孔 Ø3.4
+- 位置：前唇 y=8、后沿 y=121.2，左右 x=50 / 249.2（不进侧壁）
 
-Insert from the **underside** of BOTTOM. TOP is clearance only.
+## 打印
 
-## Still missing vs F1-8X 722
+外壳 299.20 mm 长，选嘉立创 **≥ 300 mm** 工业 FDM。PLA+ / PETG，0.4 喷嘴，0.2 层高，6 墙。
 
-- 7.22° typing wedge (Fusion boolean on a slanted solid is still unreliable)
-- Side/front/back rounding (r 6 / r 8)
-- F1-8X “paddle” plate hooks on the inner long edges
-- True underside feet pockets (current recesses cut from the top of the remaining floor)
-- M2.5 top/bottom pair (3D-print case keeps heat-set M3)
+| 件 | 朝向 | 支撑 |
+| --- | --- | --- |
+| BOTTOM | 开口朝上，底面贴床 | 无 |
+| TOP | 键窗朝上 | 无 |
+| PLATE | 平放 | 无 |
+| BAR | 3 mm 面贴床 | 无 |
 
-## Print
+## 还没做 vs 视频里的 F1-60 722
 
-PLA/PETG, 0.4 mm nozzle, 0.2 mm layer, 5–6 walls. Orient BOTTOM well-up, TOP bezel-up, PLATE flat, BAR on its 3 mm face. No supports required on these rectangular trays.
+- 前后顶棱 36° 倒角
+- 上盖分型面与底壳的裙边对中（现在是平面对扣）
+- 与 waffling60-DB 实物叠看 USB / 板边缘间隙
+- 桨式托台高度还要按轴/PCB 实测微调

@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Build the BOTTOM case: rectangular shell, cavity, weight well, insert bores.
-
-Rounded outer corners and the 7.22 deg wedge come later; this pass is a
-printable tray that already matches Dalco/F2-60 XY and the JLC M3 insert
-scheme (bore 3.6 x 6, 14 mm pad).
-"""
+"""Build the BOTTOM case: 7.22° wedge, heat-set pads, weight well, feet, USB."""
 import os
 import traceback
 
@@ -34,25 +29,12 @@ def _run():
     F = _load(ROOT + "/src/fusion_lib.py", "fusion_lib")
     Builder = F["Builder"]
     loop_area = F["loop_area"]
-
     W, H = L["W"], L["H"]
     P = L["P"]
+    split = P["split_h"]
+    split_r = L["split_rear"]()
+    floor = P["floor"]
     wall = P["side_wall"]
-    T = abs(P["deck"])                 # 16 mm tray
-    floor_keep = abs(P["floor"])       # cavity depth 10.5 -> 5.5 mm floor
-    cavity_h = T - (T - floor_keep)    # 10.5
-    # wait: deck=-16, floor=-10.5 so from top (z=0) tray is 16 mm, cavity 10.5,
-    # remaining floor 5.5. Weight well keeps 1.2 mm of that floor.
-    cavity_h = abs(P["floor"])         # 10.5
-    well_h = cavity_h - P["weight_floor"]  # 9.3
-    insert_d = P["insert_d"]
-    insert_h = P["insert_len"]
-    boss = P["boss"]
-
-    outer = [(0, 0), (W, 0), (W, H), (0, H)]
-    inner = [(wall, wall), (W - wall, wall), (W - wall, H - wall), (wall, H - wall)]
-    wx0, wy0, wx1, wy1 = P["weight"]
-    well = [(wx0, wy0), (wx1, wy0), (wx1, wy1), (wx0, wy1)]
 
     app = adsk.core.Application.get()
     for d in list(app.documents):
@@ -65,74 +47,86 @@ def _run():
     des = adsk.fusion.Design.cast(doc.products.itemByProductType("DesignProductType"))
     B = Builder(doc, des)
 
-    body = B.extrude_new(B.sketch(outer), T)
-    print("blank", round(body.volume * 1000, 1), "expect", round(abs(loop_area(outer)) * T, 1))
+    outer = L["outer_outline"]()
+    inner = L["inner_outline"]()
+    print("params split", split, "split_rear", round(split_r, 3), "floor", floor)
 
-    v0 = body.volume * 1000
-    B.cut(B.sketch(inner), body, cavity_h)
-    print("cavity removed", round(v0 - body.volume * 1000, 1),
-          "expect", round(abs(loop_area(inner)) * cavity_h, 1))
+    body = B.wedge(outer, split, split_r, 0.0, H)
+    print("BOTTOM blank vol", round(B.vol(body), 1), "bbox", B.bbox_mm(body),
+          "expect ~", round(loop_area(outer) * (split + split_r) / 2.0, 1))
 
-    # Weight well: cut from the BOTTOM face upward so it only eats the remaining
-    # floor (5.5 mm), leaving weight_floor = 1.2 mm. Sketch is still on z=0;
-    # extrude the full tray height minus 1.2 mm.
-    well_from_top = T - P["weight_floor"]
-    v0 = body.volume * 1000
-    B.cut(B.sketch(well), body, well_from_top)
-    print("well removed", round(v0 - body.volume * 1000, 1),
-          "expect ~", round(abs(loop_area(well)) * (T - cavity_h - P["weight_floor"]), 1),
-          "(floor leftover)")
+    # Inner well: a wedge up to the split plane, then strip the bottom
+    # `floor` mm off the tool so the desk face stays solid.
+    well = B.wedge(inner, split, split_r, 0.0, H)
+    B.cut_below_z(well, floor)
+    print("well tool vol", round(B.vol(well), 1), "bbox", B.bbox_mm(well))
+    v0 = B.vol(body)
+    B.combine_cut(body, well, keep=False)
+    print("cavity removed", round(v0 - B.vol(body), 1), "now", round(B.vol(body), 1))
+    # Restore the desk-face floor in case the well tool still punched through.
+    slab = B.extrude_new(B.sketch(inner), floor)
+    v0 = B.vol(body)
+    B.combine_join(body, slab, keep=False)
+    print("floor restored", round(B.vol(body) - v0, 1), "now", round(B.vol(body), 1))
 
-    # uDB window in the rear wall (through)
-    db = L["db_outline"]()
-    v0 = body.volume * 1000
-    B.cut(B.sketch(db), body, T)
-    print("udb window removed", round(v0 - body.volume * 1000, 1), "pts", len(db))
-
-    # M3 heat-set: 嘉立创 M3*4*3. Leave a 14x14 pad by NOT cutting the
-    # inner well over the four corners (the well already stops short of
-    # the 3 mm wall). Bore Ø3.6 through the remaining floor; JLC inserts
-    # from the underside into a 5.0 mm deep hole. Through-bore is OK for
-    # FDM if the floor is 5.5 mm (0.5 mm extra).
-    pad = P["nut_pad"]
+    # Restore 14x14 heat-set pads in the four corners, then bore Ø3.6 from desk.
+    # Join a rectangular prism of height split_r at each pad, then re-cut
+    # anything above the split plane.
     for i, (sx, sy) in enumerate(L["screws"]()):
-        # 14x14 pad: add a square island in the cavity at each screw
-        hw = pad / 2.0
-        island = [(sx - hw, sy - hw), (sx + hw, sy - hw),
-                  (sx + hw, sy + hw), (sx - hw, sy + hw)]
-        v0 = body.volume * 1000
-        B.extrude_new(B.sketch(island), cavity_h, join=body)
-        print("pad", i, "added", round(body.volume * 1000 - v0, 1),
-              "expect", round(pad * pad * cavity_h, 1))
-        r = insert_d / 2.0
-        hole = [(sx - r, sy - r), (sx + r, sy - r), (sx + r, sy + r), (sx - r, sy + r)]
-        v0 = body.volume * 1000
-        B.cut(B.sketch(hole), body, insert_h)  # 5.0 mm from the TOP of the pad
-        print("insert", i, "at", round(sx, 1), round(sy, 1),
-              "removed", round(v0 - body.volume * 1000, 2),
-              "expect", round(insert_d * insert_d * insert_h, 2))
+        pad = L["pad_outline"](sx, sy)
+        prism = B.extrude_new(B.sketch(pad), split_r, join=None)
+        v0 = B.vol(body)
+        B.combine_join(body, prism, keep=False)
+        print("pad", i, "joined", round(B.vol(body) - v0, 1), "at", round(sx, 1), round(sy, 1))
 
-    # F1-8X 722 square feet: 10 x 8 mm pads, glued. Fusion can only extrude
-    # from the top sketch, so a true underside pocket needs a reverse
-    # solid that this kernel will not join at the right height. Mark the
-    # pad locations with a 0.8 mm recess from the TOP of the remaining
-    # floor (cut depth = cavity_h + recess). The glued pad still sits on
-    # the underside; the recess is a locating pocket you can see/feel
-    # when flipping the shell. Corners are outside the weight well.
-    recess = P["foot_recess"]
-    for i, (cx, cy) in enumerate(L["feet"]()):
-        poly = L["foot_outline"](cx, cy)
-        v0 = body.volume * 1000
-        B.cut(B.sketch(poly), body, cavity_h + recess)
-        print("foot", i, "at", round(cx, 1), round(cy, 1),
-              "removed", round(v0 - body.volume * 1000, 2),
-              "expect", round(P["foot_w"] * P["foot_h"] * recess, 2))
+    v0 = B.vol(body)
+    B.cut_above_plane(body, split, split_r, 0.0, H)
+    print("split recut removed", round(v0 - B.vol(body), 1))
 
-    bb = body.boundingBox
-    print("BOTTOM bbox mm",
-          [round(v * 10, 2) for v in (bb.minPoint.x, bb.minPoint.y, bb.minPoint.z,
-                                      bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z)])
-    print("BOTTOM vol", round(body.volume * 1000, 1))
+    # Insert bores: 5 mm from the desk face (z=0), square 3.6.
+    for i, (sx, sy) in enumerate(L["screws"]()):
+        v0 = B.vol(body)
+        B.cut(B.sketch(L["insert_outline"](sx, sy)), body, P["insert_len"])
+        print("insert", i, "removed", round(v0 - B.vol(body), 2),
+              "expect", round(P["insert_d"] * P["insert_d"] * P["insert_len"], 2))
+
+    # USB through the rear wall.
+    v0 = B.vol(body)
+    B.cut(B.sketch(L["usb_outline"]()), body, split_r + 1.0)
+    print("usb removed", round(v0 - B.vol(body), 1))
+
+    # Left/right plate paddles: join a 1.5 mm shelf under the plate, sitting
+    # on the inner wall. Extrude from z=0 to split so they fill the cavity
+    # locally, then they act as a rest for the plate (plate is at typing-1.5,
+    # which is above the split by ~6.5 mm at the front... wait.
+    #
+    # Split is 8 mm, typing is 16 mm at the front. Plate top = typing, plate
+    # is 1.5 mm thick so plate bottom = 14.5 at the front, which is ABOVE the
+    # split (8 mm). The paddle therefore lives in the TOP, not the BOTTOM.
+    # F1-8X paddles are on the TOP inner long edges. Skip paddles on BOTTOM.
+
+    # Weight well: cut a rounded rect from z=0 up, leaving `floor` of material.
+    # Remaining floor is already `floor` everywhere if the cavity did its job.
+    # Recess the well by cutting from z=0 to 0.1 so we don't break the floor;
+    # actually the F2-60 well is a pocket in the floor. Cut 0.0 mm? Skip a
+    # second well: the inner cavity already is the weight well. Mark it with
+    # an inset 1 mm from the inner wall, cut 0.4 mm from desk? That would
+    # punch through the 1.2 mm floor. Don't.
+
+    # Foot recesses: 0.8 mm from the desk face (z=0).
+    for i, poly in enumerate(L["foot_outlines"]()):
+        v0 = B.vol(body)
+        B.cut(B.sketch(poly), body, P["foot_recess"])
+        print("foot", i, "removed", round(v0 - B.vol(body), 2),
+              "expect", round(abs(loop_area(poly)) * P["foot_recess"], 2))
+
+    body = B.keep_largest()
+    v0 = B.vol(body)
+    B.cut_above_plane(body, split, split_r, 0.0, H)
+    print("BOTTOM clamp removed", round(v0 - B.vol(body), 1))
+    print("BOTTOM bbox mm", B.bbox_mm(body))
+    print("BOTTOM vol", round(B.vol(body), 1), "faces", body.faces.count,
+          "bodies", des.rootComponent.bRepBodies.count)
     os.makedirs(OUT, exist_ok=True)
     exp = des.exportManager
     step = os.path.join(OUT, "BOTTOM.step")
