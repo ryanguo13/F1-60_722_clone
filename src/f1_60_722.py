@@ -44,6 +44,9 @@ P = dict(
     screw_inset=6.0, screw_y_front=6.0, screw_y_back=14.25,
     boss=8.0, insert_d=3.6, insert_len=6.0, screw_d=3.4,
     weight=(13.0, 13.0, 286.0, 90.0), weight_r=3.0,
+    # F1-8X 722 square feet: 10 x 8 mm pads, glued into a 0.8 mm recess
+    # (measured as 10x8 planar faces on the F1-8X BOTTOM underside).
+    foot_w=10.0, foot_h=8.0, foot_recess=0.8, foot_inset=8.0,
 )
 # Layout Y is front lip -> back. Dalco plate Y ran the other way (Esc at
 # y=90.86); we keep front-to-back order and place Esc at 14.66 like a GH60.
@@ -216,6 +219,23 @@ def db_outline():
 def weight_outline():
     x0, y0, x1, y1 = P["weight"]
     return poly_rrect(x0, y0, x1, y1, P["weight_r"])
+
+
+def feet():
+    """Centres of the square feet, F1-8X style: one at each corner.
+    60% gets 4 pads (F1-8X 80% used 6). Size 10 x 8, long axis along X."""
+    inset = P["foot_inset"]
+    return [
+        (inset + P["foot_w"] / 2, inset + P["foot_h"] / 2),
+        (W - inset - P["foot_w"] / 2, inset + P["foot_h"] / 2),
+        (inset + P["foot_w"] / 2, H - inset - P["foot_h"] / 2),
+        (W - inset - P["foot_w"] / 2, H - inset - P["foot_h"] / 2),
+    ]
+
+
+def foot_outline(cx, cy):
+    w, h = P["foot_w"] / 2, P["foot_h"] / 2
+    return [(cx - w, cy - h), (cx + w, cy - h), (cx + w, cy + h), (cx - w, cy + h)]
 
 
 # ---------------------------------------------------------------------------
