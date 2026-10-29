@@ -24,7 +24,11 @@ import os
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "out")
 
 U = 19.05
-W, H = 284.5, 94.5                 # footprint: 4 rows x 14.25 u
+# Dalco 959 Mini ANSI plate is exactly 15u wide (285.75 mm). F2-60 case is
+# ~299.2 x 117.1 mm (TOP bbox). Match that envelope: 6.72 mm side walls
+# around the 15u plate, 3.1 mm extra front/back of the 5u key block.
+W, H = 299.19, 117.08
+KX0 = 5.095                          # Dalco Esc-row origin (first 1u centre - 0.5u)
 
 P = dict(
     r_side=6.0, r_back=8.0, angle=7.22,
@@ -33,15 +37,17 @@ P = dict(
     pcb_top=-5.0, pcb_bot=-6.6,
     seat=-2.0, band=-5.0, pocket=-0.6, lip=-9.0,
     floor=-10.5, deck=-16.0, weight_floor=1.2,
-    plate_x=(5.825, 278.675), plate_y=(2.82, 91.68),
+    plate_x=(5.094, 290.844),
+    plate_y=(-2.665, 108.186),
     switch_side=14.0, hook_over=22.0,
     db_w=18.0, db_h=16.5,
     screw_inset=6.0, screw_y_front=6.0, screw_y_back=14.25,
     boss=8.0, insert_d=3.6, insert_len=6.0, screw_d=3.4,
-    weight=(11.5, 11.5, 273.0, 76.5), weight_r=3.0,
+    weight=(13.0, 13.0, 286.0, 90.0), weight_r=3.0,
 )
-ROW_Y = [13.8455, 32.8955, 51.9455, 71.0055, 85.2155]
-KX0 = (W - 15 * U) / 2.0
+# Layout Y is front lip -> back. Dalco plate Y ran the other way (Esc at
+# y=90.86); we keep front-to-back order and place Esc at 14.66 like a GH60.
+ROW_Y = [14.66, 33.71, 52.76, 71.81, 90.86]
 
 
 # ---------------------------------------------------------------------------
@@ -102,44 +108,52 @@ def loop_area(loop):
 # keys (WKL ANSI)
 # ---------------------------------------------------------------------------
 def build_keys():
+    # Standard 60% WKL ANSI. Offsets are from the left of a 15u grid
+    # (KX0 is the grid origin). No extra blocker keys.
     rows = [
         [(0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1),
-         (10, 1), (11, 1), (12, 2)],
-        [(0, 1.5)] + [(1.5, 1)] * 10 + [(11.5, 1), (12.5, 1), (13.5, 1.5), (15.0, 1.5), (16.5, 1.5)],
-        [(0, 1.75)] + [(1.75, 1)] * 9 + [(10.75, 1), (11.75, 1), (12.75, 2.25), (15.0, 1.5), (16.5, 1.5)],
-        [(0, 2.25)] + [(2.25, 1)] * 7 + [(9.25, 1), (10.25, 1), (11.25, 1), (12.25, 1.75),
-                                       (14.0, 2.75), (16.75, 1.25)],
+         (10, 1), (11, 1), (12, 1), (13, 2)],
+        [(0, 1.5)] + [(1.5 + i, 1) for i in range(12)] + [(13.5, 1.5)],
+        [(0, 1.75)] + [(1.75 + i, 1) for i in range(11)] + [(12.75, 2.25)],
+        [(0, 2.25)] + [(2.25 + i, 1) for i in range(10)] + [(12.25, 1.75), (14.0, 1)],
         [(0, 1.25), (1.25, 1.25), (2.5, 1.25), (3.75, 6.25), (10.0, 1.25), (11.25, 1.25),
          (12.5, 1.25), (13.75, 1.25)],
     ]
     keys = []
     for r, row in enumerate(rows):
-        x_left = KX0 - 0.125 * U + (1.25 * U if r in (1, 2, 3) else 0.0)
         for off, w in row:
-            x0 = x_left + off * U
+            x0 = KX0 + off * U
             yc = ROW_Y[r]
             keys.append(dict(x0=x0, x1=x0 + w * U, y0=yc - U / 2, y1=yc + U / 2, w=w, row=r))
     return keys
 
 
 KEYS = build_keys()
-STABS = [(1, 2.25, 2.0), (2, 2.25, 2.0), (3, 2.75, 2.0), (4, 6.25, 6.25)]
+# Cherry stabs: L-Shift 2.25 (row 3), Enter 2.25 (row 2), space 6.25 (row 4).
+STABS = [(3, 2.25, 2.0), (2, 2.25, 2.0), (4, 6.25, 6.25)]
 SPACE = [k for k in KEYS if k["row"] == 4 and abs(k["w"] - 6.25) < 1e-6][0]
 DB_CX = (SPACE["x0"] + SPACE["x1"]) / 2
-SW_X0 = min(k["x0"] for k in KEYS) - P["hook_over"]
-SW_X1 = max(k["x1"] for k in KEYS) + P["hook_over"]
-SW_Y0 = min(k["y0"] for k in KEYS)
-SW_Y1 = max(k["y1"] for k in KEYS)
-FRONT_ROW_Y1 = max(k["y1"] for k in KEYS if k["row"] == 1)
+PLATE_KEYS = list(KEYS)
+# Keep the Dalco ANSI plate envelope (do not shrink to the key cluster).
+P["plate_x"] = (5.094, 290.844)
+P["plate_y"] = (-2.665, 108.186)
+SW_X0 = min(k["x0"] for k in PLATE_KEYS) - P["hook_over"]
+SW_X1 = max(k["x1"] for k in PLATE_KEYS) + P["hook_over"]
+SW_Y0 = min(k["y0"] for k in PLATE_KEYS)
+SW_Y1 = max(k["y1"] for k in PLATE_KEYS)
+FRONT_ROW_Y1 = max(k["y1"] for k in PLATE_KEYS if k["row"] == 1)
 
 
 def stab_holes(k):
+    """Cherry PCB-mount stab centres. Distances match Dalco ANSI plate."""
     out = []
+    # wire span between stab centres, mm (not unit widths)
+    span = {2.0: 23.8, 6.25: 100.0, 2.25: 23.8, 2.75: 23.8}
     for (row, kw, wire) in STABS:
         if k["row"] != row or abs(k["w"] - kw) > 1e-6:
             continue
-        kc = (k["x0"] + k["x1"]) / 2 + (0.2 if row == 3 else 0.0)
-        half = (wire - 1) * U / 2
+        kc = (k["x0"] + k["x1"]) / 2.0
+        half = span.get(wire, (wire - 1) * U) / 2.0
         out += [(kc - half, ROW_Y[row]), (kc + half, ROW_Y[row])]
     return out
 
@@ -228,6 +242,8 @@ if __name__ == "__main__":
     p = plan()
     for part, d in p.items():
         print(part, d)
-    print("keys", len(KEYS), "screws", [(round(a, 1), round(b, 1)) for a, b in screws()],
+    print("keys", len(KEYS), "on plate", len(PLATE_KEYS),
+          "screws", [(round(a, 1), round(b, 1)) for a, b in screws()],
           "uDB centre", (round(DB_CX, 2), round(db_centre_y(), 2)))
+    print("plate x %.2f..%.2f y %.2f..%.2f" % (P["plate_x"] + P["plate_y"]))
     print("switch area x %.1f..%.1f y %.1f..%.1f" % (SW_X0, SW_X1, SW_Y0, SW_Y1))

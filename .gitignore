@@ -4,3 +4,7 @@ ref/img/
 out/*.bak
 *.pyc
 __pycache__/
+src/measure_*.py
+src/probe_*.py
+src/close_all.py
+work/
